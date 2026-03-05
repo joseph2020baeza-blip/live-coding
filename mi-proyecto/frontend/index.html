@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TechComponentes | Hackathon MVP</title>
+    <meta name="description"
+        content="Marketplace de componentes tecnológicos. Compra y vende hardware al mejor precio.">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <!-- ════════════════════════════════════════════════
+         HEADER — Sticky, visible siempre
+         Controles de nav se muestran/ocultan por JS
+    ════════════════════════════════════════════════ -->
+    <header class="tech-header">
+        <div class="header-container">
+
+            <a href="#" onclick="app.router('catalog')" class="logo" id="logo-link">
+                Tech<span>Componentes</span>
+            </a>
+
+            <!-- Panel de usuario autenticado (oculto para guests) -->
+            <nav id="user-panel" class="hidden nav-actions">
+                <span id="user-display" class="nav-user-info"></span>
+                <a href="#" onclick="app.router('vender')" class="nav-btn" id="nav-vender">＋ Vender</a>
+                <a href="#" onclick="app.router('orders')" class="nav-btn" id="nav-orders">📋 Mis Pedidos</a>
+                <a href="#" onclick="app.toggleCart()" class="nav-btn" id="nav-cart">
+                    🛒 Cesta <span id="cart-badge" class="badge">0</span>
+                </a>
+                <a href="#" onclick="app.logout()" class="nav-btn nav-logout">Salir</a>
+            </nav>
+
+        </div>
+    </header>
+
+    <!-- ════════════════════════════════════════════════
+         MAIN — SPA: solo una sección visible a la vez
+    ════════════════════════════════════════════════ -->
+    <main class="main-container">
+
+        <!-- ── BANNER ADMIN (solo visible si role === 'admin') ── -->
+        <div id="admin-banner" class="admin-banner hidden">
+            ⚠️ <strong>MODO ADMINISTRADOR</strong> — Puedes editar precios y eliminar productos.
+        </div>
+
+        <!-- ══════════════════════════════════════════════════════
+             VISTA: LOGIN / REGISTER  (#view-login)
+        ═══════════════════════════════════════════════════════ -->
+        <section id="view-login">
+
+            <!-- Tabs de navegación LOGIN ↔ REGISTER -->
+            <div class="auth-tabs">
+                <button id="tab-login" class="auth-tab active" onclick="app.router('login')">Iniciar Sesión</button>
+                <button id="tab-register" class="auth-tab" onclick="app.router('register')">Crear Cuenta</button>
+            </div>
+
+            <!-- ── Panel LOGIN ── -->
+            <div id="panel-login" class="card auth-card">
+                <h2 class="auth-title">Bienvenido</h2>
+                <p class="auth-hint">
+                    <strong>Demo:</strong>
+                    Admin: <code>admin@tech.com</code> / <code>Admin123!</code>
+                </p>
+
+                <form id="form-login" onsubmit="app.login(event)" novalidate>
+                    <label for="login-email">Email</label>
+                    <input id="login-email" type="email" name="email" placeholder="tu@email.com" required
+                        autocomplete="email">
+
+                    <label for="login-password">Contraseña</label>
+                    <input id="login-password" type="password" name="password" placeholder="••••••••" required
+                        autocomplete="current-password">
+
+                    <button type="submit" class="btn-primary" style="margin-top:0.5rem;">
+                        Entrar →
+                    </button>
+                </form>
+
+                <p class="auth-switch">
+                    ¿No tienes cuenta?
+                    <a href="#" onclick="app.router('register')">Regístrate gratis</a>
+                </p>
+                <p class="auth-switch" style="margin-top:0.5rem;">
+                    <a href="#" onclick="app.router('recovery')" class="recovery-link">¿Olvidaste tu contraseña?</a>
+                </p>
+
+                <!-- ── Social Login ── -->
+                <div class="social-divider">
+                    <span>O continúa con</span>
+                </div>
+                <div class="social-login-section">
+                    <a href="http://localhost:5000/api/auth/google" class="btn-social btn-social-google"
+                        style="text-decoration: none; display: flex; align-items: center; justify-content: center;">
+                        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"
+                            style="margin-right:8px;">
+                            <path
+                                d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615Z"
+                                fill="#4285F4" />
+                            <path
+                                d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18Z"
+                                fill="#34A853" />
+                            <path
+                                d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332Z"
+                                fill="#FBBC05" />
+                            <path
+                                d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58Z"
+                                fill="#EA4335" />
+                        </svg>
+                        Continuar con Google
+                    </a>
+                </div>
+            </div>
+
+            <!-- ── Panel REGISTER ── -->
+            <div id="panel-register" class="card auth-card hidden">
+                <h2 class="auth-title">Crear Cuenta</h2>
+                <p class="auth-hint">Recibirás <strong>2.000€</strong> de saldo inicial para comprar.</p>
+
+                <form id="form-register" onsubmit="app.register(event)" novalidate>
+                    <label for="reg-username">Nombre de usuario</label>
+                    <input id="reg-username" type="text" name="username" placeholder="MiNombre" required minlength="2"
+                        autocomplete="nickname">
+
+                    <label for="reg-email">Email</label>
+                    <input id="reg-email" type="email" name="email" placeholder="tu@email.com" required
+                        autocomplete="email">
+
+                    <label for="reg-pass">Contraseña</label>
+                    <input id="reg-pass" type="password" name="password"
+                        placeholder="Mín. 8 chars, 1 mayús, 1 núm, 1 símbolo" required autocomplete="new-password">
+
+                    <label for="reg-confirm">Confirmar contraseña</label>
+                    <input id="reg-confirm" type="password" name="confirmPassword" placeholder="Repite la contraseña"
+                        required autocomplete="new-password">
+
+                    <p class="password-hint">
+                        🔒 Mínimo 8 caracteres, 1 mayúscula, 1 número y 1 símbolo (!@#$%...)
+                    </p>
+
+                    <button type="submit" class="btn-primary" style="margin-top:0.5rem;">
+                        Crear Cuenta →
+                    </button>
+                </form>
+
+                <p class="auth-switch">
+                    ¿Ya tienes cuenta?
+                    <a href="#" onclick="app.router('login')">Inicia sesión</a>
+                </p>
+
+                <!-- ── Social Login (también disponible en Registro) ── -->
+                <div class="social-divider"><span>O regístrate con</span></div>
+                <div class="social-login-section">
+                    <a href="http://localhost:5000/api/auth/google" class="btn-social btn-social-google"
+                        style="text-decoration: none; display: flex; align-items: center; justify-content: center;">
+                        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"
+                            style="margin-right:8px;">
+                            <path
+                                d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615Z"
+                                fill="#4285F4" />
+                            <path
+                                d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18Z"
+                                fill="#34A853" />
+                            <path
+                                d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332Z"
+                                fill="#FBBC05" />
+                            <path
+                                d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58Z"
+                                fill="#EA4335" />
+                        </svg>
+                        Continuar con Google
+                    </a>
+                </div>
+            </div>
+
+        </section>
+
+
+        <!-- ══════════════════════════════════════════════════════
+             VISTA: CATÁLOGO  (#view-catalog)
+        ═══════════════════════════════════════════════════════ -->
+        <section id="view-catalog" class="hidden">
+
+            <div class="catalog-header">
+                <h2>Catálogo de Productos</h2>
+                <a href="#" onclick="app.router('vender')" class="btn-outline" id="btn-publicar">＋ Publicar</a>
+            </div>
+
+            <!-- Grid de producto cards — renderizado por JS -->
+            <div id="products-grid" class="products-grid"></div>
+
+        </section>
+
+
+        <!-- ══════════════════════════════════════════════════════
+             VISTA: VENDER (#view-vender)
+        ═══════════════════════════════════════════════════════ -->
+        <section id="view-vender" class="hidden">
+
+            <div class="card" style="max-width:520px; margin:0 auto;">
+                <h2>Publicar Artículo</h2>
+
+                <form onsubmit="app.createProduct(event)" novalidate>
+
+                    <label for="vender-name">Nombre del producto *</label>
+                    <input id="vender-name" type="text" name="name" placeholder="Ej: ASUS ROG..." required
+                        minlength="3">
+
+                    <label for="vender-desc">Descripción</label>
+                    <textarea id="vender-desc" name="description" rows="3"
+                        placeholder="Especificaciones técnicas, estado, etc." style="resize:vertical;"></textarea>
+
+                    <label for="vender-price">Precio (€) *</label>
+                    <input id="vender-price" type="number" name="price" placeholder="0.00" step="0.01" min="0.01"
+                        required>
+
+                    <label for="vender-img">URL de imagen (opcional)</label>
+                    <input id="vender-img" type="url" name="image" placeholder="https://...">
+
+                    <div style="display:flex; gap:1rem; margin-top:1rem;">
+                        <button type="submit" class="btn-primary">Publicar Ahora</button>
+                        <button type="button" onclick="app.router('catalog')" class="btn-cancel">Cancelar</button>
+                    </div>
+
+                </form>
+            </div>
+
+        </section>
+
+
+        <!-- ══════════════════════════════════════════════════════
+             VISTA: RECUPERACIÓN DE CONTRASEÑA (#view-recovery)
+             Flujo de 3 pasos:
+               PASO 1 → Introducir email
+               PASO 2 → Simulación OAuth Google (isVerified gate)
+               PASO 3 → Establecer nueva contraseña
+        ═══════════════════════════════════════════════════════ -->
+        <section id="view-recovery" class="hidden">
+            <div class="recovery-card card">
+
+                <!-- Cabecera con ícono y back-link -->
+                <div class="recovery-header">
+                    <button type="button" onclick="app.router('login')" class="btn-back" title="Volver al login">←
+                        Volver</button>
+                    <h2 class="auth-title" style="margin-bottom:0">Recuperar Contraseña</h2>
+                </div>
+
+                <!-- Indicador de pasos -->
+                <div class="recovery-steps">
+                    <div class="step-dot" id="step-dot-1" title="Paso 1: Email"></div>
+                    <div class="step-line"></div>
+                    <div class="step-dot" id="step-dot-2" title="Paso 2: Verificar Google"></div>
+                    <div class="step-line"></div>
+                    <div class="step-dot" id="step-dot-3" title="Paso 3: Nueva Contraseña"></div>
+                </div>
+
+                <!-- ── PASO 1: Introduzir Email ── -->
+                <div id="recovery-step-1">
+                    <p class="auth-hint">Introduce el email de tu cuenta para verificar tu identidad.</p>
+                    <form id="form-recovery-email" onsubmit="app.mockGoogleAuth(event)" novalidate>
+                        <label for="recovery-email">Email de la cuenta</label>
+                        <input id="recovery-email" type="email" name="email" placeholder="tu@email.com" required
+                            autocomplete="email">
+                        <!--
+                          [NOTA AUDITORÍA - PRODUCCIÓN]
+                          En producción este botón abriría el flujo real de Firebase Auth
+                          o el SDK de Google Identity Services (GIS):
+                            google.accounts.oauth2.initCodeClient({ ... })
+                          El endpoint de callback verificaría el id_token con Google APIs.
+                          Aquí usamos window.confirm() como simulación auditada.
+                        -->
+                        <button type="submit" class="btn-google" id="btn-google-verify">
+                            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                                <path
+                                    d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615Z"
+                                    fill="#4285F4" />
+                                <path
+                                    d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18Z"
+                                    fill="#34A853" />
+                                <path
+                                    d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332Z"
+                                    fill="#FBBC05" />
+                                <path
+                                    d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58Z"
+                                    fill="#EA4335" />
+                            </svg>
+                            Verificar identidad con Google
+                        </button>
+                    </form>
+                </div>
+
+                <!-- ── PASO 2: Autorizando… (estado de carga) ── -->
+                <div id="recovery-step-2" class="hidden">
+                    <div class="google-mock-popup">
+                        <div class="google-popup-header">
+                            <svg width="24" height="24" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                                <path
+                                    d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615Z"
+                                    fill="#4285F4" />
+                                <path
+                                    d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18Z"
+                                    fill="#34A853" />
+                                <path
+                                    d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332Z"
+                                    fill="#FBBC05" />
+                                <path
+                                    d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58Z"
+                                    fill="#EA4335" />
+                            </svg>
+                            <span>Google Accounts</span>
+                        </div>
+                        <p class="google-popup-text">Autorizando acceso a <strong>TechComponentes</strong>…</p>
+                        <div class="google-spinner"></div>
+                        <p class="google-popup-sub">Esta es una simulación del flujo OAuth 2.0.<br>En producción usaría
+                            el SDK de Google Identity Services.</p>
+                    </div>
+                </div>
+
+                <!-- ── PASO 3: Nueva Contraseña (gateado por isVerified) ── -->
+                <div id="recovery-step-3" class="hidden">
+                    <div class="verified-badge">
+                        <span class="verified-icon">✓</span>
+                        <span>Identidad verificada con Google</span>
+                    </div>
+                    <p class="auth-hint">Establece tu nueva contraseña. Debe cumplir los requisitos de seguridad.</p>
+                    <form id="form-reset-password" onsubmit="app.resetPassword(event)" novalidate>
+                        <label for="new-password">Nueva contraseña</label>
+                        <input id="new-password" type="password" name="newPassword"
+                            placeholder="Mín. 8 chars, 1 mayús, 1 núm, 1 símbolo" required autocomplete="new-password">
+
+                        <label for="confirm-new-password">Confirmar nueva contraseña</label>
+                        <input id="confirm-new-password" type="password" name="confirmPassword"
+                            placeholder="Repite la contraseña" required autocomplete="new-password">
+
+                        <p class="password-hint">🔒 Mín. 8 chars, 1 mayúscula, 1 número, 1 símbolo (!@#$%...)</p>
+
+                        <button type="submit" class="btn-primary">Guardar Nueva Contraseña</button>
+                    </form>
+                </div>
+
+            </div>
+        </section>
+
+
+        <!-- ══════════════════════════════════════════════════════
+             VISTA: MIS PEDIDOS (#view-orders)
+             Privada: solo visible para el usuario logueado.
+             El contenido se renderiza con app.renderOrders() — DOM-safe.
+        ═══════════════════════════════════════════════════════ -->
+        <section id="view-orders" class="hidden">
+
+            <div class="orders-page">
+                <div class="catalog-header" style="margin-bottom:1.5rem;">
+                    <h2>📋 Mis Pedidos</h2>
+                    <a href="#" onclick="app.router('catalog')" class="btn-outline">← Volver al catálogo</a>
+                </div>
+
+                <!-- Los pedidos se inyectan aquí por app.renderOrders() -->
+                <div id="orders-container"></div>
+            </div>
+
+        </section>
+
+    </main><!-- /main -->
+
+
+    <!-- ════════════════════════════════════════════════
+         MODAL: CARRITO  (#cart-modal)
+    ════════════════════════════════════════════════ -->
+    <dialog id="cart-modal" class="cart-dialog">
+
+        <div class="cart-dialog-header">
+            <strong>🛒 Mi Cesta</strong>
+            <button type="button" onclick="app.toggleCart()" class="btn-close-modal">✕</button>
+        </div>
+
+        <div id="cart-items" class="cart-dialog-body"></div>
+
+        <div class="cart-dialog-footer">
+            <div class="cart-total-row">
+                <span>Total:</span>
+                <strong><span id="cart-total">0.00</span>€</strong>
+            </div>
+            <button id="btn-checkout" type="button" onclick="app.checkout()" class="btn-primary">
+                Tramitar Pedido
+            </button>
+        </div>
+
+    </dialog>
+
+
+    <!-- ════════════════════════════════════════════════
+         TOAST CONTAINER — Notificaciones emergentes
+    ════════════════════════════════════════════════ -->
+    <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+
+    <!-- ════════════════════════════════════════════════
+         SCRIPTS
+         Carga diferida (defer) para garantizar que el
+         DOM está listo antes de ejecutar app.init()
+    ════════════════════════════════════════════════ -->
+    <script src="js/app.js" defer></script>
+
+</body>
+
+</html>

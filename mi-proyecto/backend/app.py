@@ -1,0 +1,263 @@
+import os
+# Permitir uso de OAuth sobre HTTP (localhost)
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+
+import json
+from flask import Flask, request, jsonify, session
+from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
+import jwt
+import datetime
+from authlib.integrations.flask_client import OAuth
+from flask import redirect
+
+app = Flask(__name__)
+CORS(app)
+
+basedir = os.path.abspath(os.path.dirname(__file__))
+
+# ── Configuración única ──────────────────────────────────────────────────────
+app.config['SECRET_KEY'] = 'HACKATHON_SUPER_SECRET_KEY'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'instance', 'tienda.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# Credenciales OAuth leídas del entorno (inyectadas por docker-compose.yml)
+app.config['GOOGLE_CLIENT_ID']     = os.environ.get('GOOGLE_CLIENT_ID')
+app.config['GOOGLE_CLIENT_SECRET'] = os.environ.get('GOOGLE_CLIENT_SECRET')
+
+db = SQLAlchemy(app)
+
+# ── OAuth con Google ─────────────────────────────────────────────────────────
+oauth = OAuth(app)
+google = oauth.register(
+    name='google',
+    client_id=app.config['GOOGLE_CLIENT_ID'],
+    client_secret=app.config['GOOGLE_CLIENT_SECRET'],
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    client_kwargs={'scope': 'openid email profile'}
+)
+
+# --- MODELOS ---
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password = db.Column(db.String(255), nullable=False)
+    username = db.Column(db.String(80), nullable=False)
+    role = db.Column(db.String(20), default='user')
+    balance = db.Column(db.Float, default=2000.0) # El carrito lo requiere
+
+class Product(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text) # Agregado porque el frontend lo pinta
+    price = db.Column(db.Float, nullable=False)
+    image = db.Column(db.String(255))
+    stock = db.Column(db.Integer, default=10) # Agregado para validación carrito
+    seller_id = db.Column(db.Integer, nullable=False)
+
+class Order(db.Model): # Agregado para historial de pedidos
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False)
+    total = db.Column(db.Float, nullable=False)
+    date = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    status = db.Column(db.String(50), default='completed')
+    items_summary = db.Column(db.Text) # Stringificado por simplicidad en demo
+
+# --- DECORADOR ---
+def token_required(f):
+    def decorator(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            token = request.headers['Authorization'].split(" ")[1] # Bearer <token>
+        if not token:
+            return jsonify({'message': 'Token faltante'}), 401
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user = db.session.get(User, data['id'])
+        except Exception as e:
+            return jsonify({'message': 'Token inválido o expirado'}), 401
+        if not current_user:
+            return jsonify({'message': 'Usuario no encontrado'}), 401
+        return f(current_user, *args, **kwargs)
+    decorator.__name__ = f.__name__
+    return decorator
+
+# --- ENDPOINTS REST ---
+
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    hashed_password = generate_password_hash(data['password'], method='pbkdf2:sha256')
+    
+    new_user = User(
+        email=data['email'], 
+        username=data['username'], 
+        password=hashed_password,
+        balance=2000.0
+    )
+    try:
+        db.session.add(new_user)
+        db.session.commit()
+        return jsonify({'message': 'Usuario creado'}), 201
+    except:
+        db.session.rollback()
+        return jsonify({'message': 'El email ya existe'}), 400
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    user = User.query.filter_by(email=data['email']).first()
+    
+    if user and check_password_hash(user.password, data['password']):
+        token = jwt.encode({
+            'id': user.id,
+            'role': user.role,
+            'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+        }, app.config['SECRET_KEY'], algorithm="HS256")
+        
+        return jsonify({
+            'token': token,
+            'user': {'id': user.id, 'email': user.email, 'username': user.username, 'role': user.role, 'balance': user.balance}
+        })
+    return jsonify({'message': 'Credenciales incorrectas'}), 401
+
+@app.route('/api/auth/me', methods=['GET'])
+@token_required
+def get_me(current_user):
+    return jsonify({
+        'id': current_user.id,
+        'email': current_user.email,
+        'username': current_user.username,
+        'role': current_user.role,
+        'balance': current_user.balance
+    })
+
+@app.route('/api/auth/google')
+def google_auth():
+    redirect_uri = 'http://localhost:5000/api/auth/google/callback'
+    return google.authorize_redirect(redirect_uri)
+
+@app.route('/api/auth/google/callback')
+def google_callback():
+    try:
+        token = google.authorize_access_token()
+        user_info = token.get('userinfo')
+    except Exception as e:
+        return jsonify({'error': str(e), 'message': 'Google rechazó las credenciales. Revisa tu Client ID y Secret.'}), 401
+    
+    
+    email = user_info['email']
+    user = User.query.filter_by(email=email).first()
+    
+    if not user:
+        user = User(
+            email=email,
+            username=user_info.get('name', email.split('@')[0]),
+            password=generate_password_hash('oauth_random_pass', method='pbkdf2:sha256'),
+            role='user',
+            balance=2000.0
+        )
+        db.session.add(user)
+        db.session.commit()
+
+    jwt_token = jwt.encode({
+        'id': user.id,
+        'role': user.role,
+        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+    }, app.config['SECRET_KEY'], algorithm="HS256")
+    
+    return redirect(f"http://localhost:8080/?tc_token={jwt_token}")
+
+@app.route('/api/products', methods=['GET'])
+def get_products():
+    products = Product.query.all()
+    out = []
+    for p in products:
+        out.append({'id': p.id, 'name': p.name, 'description': p.description, 'price': p.price, 'image': p.image, 'stock': p.stock, 'sellerId': p.seller_id})
+    return jsonify(out)
+
+@app.route('/api/products', methods=['POST'])
+@token_required
+def create_product(current_user):
+    if current_user.role != 'admin':
+        return jsonify({'message': 'Acceso denegado: Solo admins'}), 403
+
+    data = request.get_json()
+    new_product = Product(
+        name=data['name'], 
+        price=float(data['price']), 
+        description=data.get('description', ''),
+        image=data['image'],
+        stock=int(data.get('stock', 10)),
+        seller_id=current_user.id
+    )
+    db.session.add(new_product)
+    db.session.commit()
+    return jsonify({'message': 'Producto creado', 'id': new_product.id}), 201
+
+@app.route('/api/orders', methods=['POST'])
+@token_required
+def checkout(current_user):
+    data = request.get_json()
+    items = data.get('items', [])
+    total = float(data.get('total', 0.0))
+
+    if current_user.balance < total:
+        return jsonify({'message': 'Saldo insuficiente'}), 400
+
+    # Stock validation n locking (simplified)
+    for item in items:
+        prod = db.session.get(Product, item['id'])
+        if not prod or prod.stock < 1:
+            db.session.rollback()
+            return jsonify({'message': f"El producto {item.get('name')} se ha agotado."}), 400
+        prod.stock -= 1
+
+    current_user.balance -= total
+    
+    order = Order(
+        user_id=current_user.id,
+        total=total,
+        items_summary=json.dumps(items)
+    )
+    db.session.add(order)
+    db.session.commit()
+    return jsonify({'message': 'Compra verificada y guardada'}), 200
+
+@app.route('/api/orders/me', methods=['GET'])
+@token_required
+def get_my_orders(current_user):
+    orders = Order.query.filter_by(user_id=current_user.id).order_by(Order.date.desc()).all()
+    out = []
+    for o in orders:
+        items = []
+        try: items = json.loads(o.items_summary) 
+        except: pass
+        out.append({'id': f"ORD-{o.id}", 'date': o.date.isoformat(), 'total': o.total, 'status': o.status, 'items': items})
+    return jsonify(out)
+
+
+# --- INSTANCIA DIRECTA (SEED) ---
+with app.app_context():
+    os.makedirs(os.path.join(basedir, 'instance'), exist_ok=True)
+    db.create_all()
+    if not User.query.filter_by(email='admin@tech.com').first():
+        admin = User(
+            email='admin@tech.com', 
+            username='AdminTech', 
+            password=generate_password_hash('Admin123!', method='pbkdf2:sha256'),
+            role='admin',
+            balance=99999.0
+        )
+        db.session.add(admin)
+        db.session.commit()
+        
+        # Seed Products 
+        p1 = Product(name='ASUS ROG Strix B550', price=179.99, description='Placa base potente.', image='https://placehold.co/320x220/212529/FF6000?text=ASUS+ROG', stock=5, seller_id=admin.id)
+        p2 = Product(name='AMD Ryzen 7 5800X', price=299.00, description='CPU 8 núcleos', image='https://placehold.co/320x220/212529/FF6000?text=Ryzen+7', stock=0, seller_id=admin.id)
+        p3 = Product(name='Corsair Vengeance 32GB', price=89.50, description='RAM DDR4 RGB', image='https://placehold.co/320x220/212529/FF6000?text=Corsair+32GB', stock=15, seller_id=admin.id)
+        db.session.add_all([p1, p2, p3])
+        db.session.commit()
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)

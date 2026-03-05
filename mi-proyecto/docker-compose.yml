@@ -1,18 +1,24 @@
-services:
-  # Servicio del Backend (Node.js, Python, PHP...)
-  api:
-    build: ./backend
-    ports:
-      - "3000:3000"  # Mapea el puerto 3000 del contenedor al 3000 de tu PC
-    volumes:
-      - ./backend:/app # Sincroniza tu código para ver cambios en vivo
-    environment:
-      - NODE_ENV=production
+version: '3.8'
 
-  # Servicio del Frontend (Servidor web sencillo)
-  web:
-    image: nginx:alpine
+services:
+  backend:
+    build: ./backend
+    container_name: tienda_backend
     ports:
-      - "8080:80"    # Entrarás a tu app desde http://localhost:8080
+      - "5000:5000"
+    # COPIA ESTO EXACTAMENTE:
+    environment:
+      - GOOGLE_CLIENT_ID=1028547201522-k75746u9n3t3svgqiksed5uleoso8sjd.apps.googleusercontent.com
+      - GOOGLE_CLIENT_SECRET=GOCSPX-V2gxGAMMPn4X7TReKl4fEe3HY8s
     volumes:
-      - ./frontend:/usr/share/nginx/html # Sirve tus archivos HTML/JS
+      - ./backend:/app
+
+  frontend:
+    image: nginx:alpine
+    container_name: tienda_frontend
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html
+    depends_on:
+      - backend

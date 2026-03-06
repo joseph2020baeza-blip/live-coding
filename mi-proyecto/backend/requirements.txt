@@ -3,6 +3,8 @@ Flask-Cors==6.0.0
 Flask-SQLAlchemy==3.1.1
 PyJWT==2.8.0
 Werkzeug==3.1.6
-Authlib==1.6.6
+Authlib==1.6.7
 requests==2.32.4
 python-dotenv==1.0.1
+pytest==8.3.5
+pytest-cov==6.0.0

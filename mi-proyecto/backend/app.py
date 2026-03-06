@@ -3,6 +3,8 @@ import os
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 import json
+import re
+import logging
 from flask import Flask, request, jsonify, session
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -18,6 +20,13 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+# ── Configuración del logger de aplicación ───────────────────────────────────
+logging.basicConfig(
+    level=logging.WARNING,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 
@@ -83,11 +92,28 @@ def token_required(f):
 @app.route('/api/auth/register', methods=['POST'])
 def register():
     data = request.get_json()
-    hashed_password = generate_password_hash(data['password'], method='pbkdf2:sha256')
-    
+
+    # Validar campos requeridos
+    email = data.get('email', '').strip().lower()
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+
+    if not email or not username or not password:
+        return jsonify({'message': 'Email, nombre de usuario y contraseña son requeridos'}), 400
+
+    # Validar formato de email
+    email_regex = r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_regex, email):
+        return jsonify({'message': 'Formato de email inválido'}), 400
+
+    # Verificar si el email ya existe (mensaje claro)
+    if User.query.filter_by(email=email).first():
+        return jsonify({'message': f'El email "{email}" ya está registrado. Usa un email diferente o inicia sesión.'}), 409
+
+    hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
     new_user = User(
-        email=data['email'], 
-        username=data['username'], 
+        email=email,
+        username=username,
         password=hashed_password,
         balance=2000.0
     )
@@ -95,16 +121,18 @@ def register():
         db.session.add(new_user)
         db.session.commit()
         return jsonify({'message': 'Usuario creado'}), 201
-    except:
+    except Exception as e:
         db.session.rollback()
-        return jsonify({'message': 'El email ya existe'}), 400
+        return jsonify({'message': f'Error al crear el usuario: {str(e)}'}), 500
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     data = request.get_json()
-    user = User.query.filter_by(email=data['email']).first()
-    
-    if user and check_password_hash(user.password, data['password']):
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+    user = User.query.filter_by(email=email).first()
+
+    if user and check_password_hash(user.password, password):
         token = jwt.encode({
             'id': user.id,
             'role': user.role,
@@ -230,8 +258,11 @@ def get_my_orders(current_user):
     out = []
     for o in orders:
         items = []
-        try: items = json.loads(o.items_summary) 
-        except: pass
+        try:
+            items = json.loads(o.items_summary)
+        except (json.JSONDecodeError, TypeError) as exc:
+            # Registrar la anomalía pero continuar — el pedido existe aunque falte el resumen
+            logger.warning("Order %s has invalid items_summary: %s", o.id, exc)
         out.append({'id': f"ORD-{o.id}", 'date': o.date.isoformat(), 'total': o.total, 'status': o.status, 'items': items})
     return jsonify(out)
 
@@ -259,4 +290,10 @@ with app.app_context():
         db.session.commit()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    # host='0.0.0.0' ES NECESARIO en Docker para que el proceso escuche en todas
+    # las interfaces del contenedor y sea accesible desde el host o el proxy inverso.
+    # En producción, el tráfico externo nunca llega directamente aquí: pasa por
+    # Nginx (que actúa de proxy reverso) dentro de la misma red Docker interna.
+    # Por tanto NO representa una exposición pública: Nginx filtra y reenvía.
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)

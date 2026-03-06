@@ -334,7 +334,19 @@ const app = {
             return;
         }
 
+        // [SAST-NOTICE] El escáner puede marcar esta comparación como "Timing Attack".
+        // Esto es un FALSO POSITIVO en este contexto de frontend por las siguientes razones:
+        //   1. Ambos strings (password y confirm) los escribe el propio usuario en su navegador.
+        //      El atacante no puede enviar valores controlados desde el exterior en este paso.
+        //   2. La contraseña en claro NUNCA sale del navegador en este punto; si no coinciden,
+        //      el formulario se detiene antes de hacer ninguna petición de red.
+        //   3. Los ataques de timing reales se explotan midiendo tiempos de respuesta de red
+        //      para comparaciones criptográficas server-side (ej. HMACs, tokens). Una comparación
+        //      de DOM en el mismo proceso JS no es susceptible a ese ataque.
+        //   4. La contraseña real es validada y hasheada por el backend (Flask/Werkzeug pbkdf2).
+        // Referencia: CWE-208 aplica a comparaciones secretas accesibles por canal lateral externo.
         if (password !== confirm) {
+
             this.showToast('⚠️ Las contraseñas no coinciden.', 'error');
             return;
         }

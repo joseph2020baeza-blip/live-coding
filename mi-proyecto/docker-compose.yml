@@ -10,9 +10,8 @@ services:
     container_name: tienda_backend
     ports:
       - "5000:5000"
-    environment:
-      - GOOGLE_CLIENT_ID=1028547201522-k75746u9n3t3svgqiksed5uleoso8sjd.apps.googleusercontent.com
-      - GOOGLE_CLIENT_SECRET=GOCSPX-V2gxGAMMPn4X7TReKl4fEe3HY8s
+    env_file:
+      - .env
     volumes:
       - ./backend:/app
     networks:

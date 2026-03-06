@@ -10,6 +10,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 import datetime
 import secrets
+import hmac  # Importado por si se requieren verificaciones manuales timing-safe
+from dotenv import load_dotenv
+
+# Cargar variables desde .env si existe
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)

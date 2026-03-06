@@ -21,10 +21,14 @@ CORS(app)
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 
-# ── Configuración única ──────────────────────────────────────────────────────
-# Si no hay SECRET_KEY en las variables de entorno, genera una segura dinámicamente
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'instance', 'tienda.db')
+# ── Configuración única y Fail Fast (CWE-798) ────────────────────────────────
+secret_key = os.environ.get('SECRET_KEY')
+if not secret_key:
+    raise ValueError("💥 CRÍTICO: Variable de entorno SECRET_KEY no está definida. Inicio seguro abortado (Fail Fast).")
+app.config['SECRET_KEY'] = secret_key
+
+db_uri = os.environ.get('DATABASE_URI', 'sqlite:///' + os.path.join(basedir, 'instance', 'tienda.db'))
+app.config['SQLALCHEMY_DATABASE_URI'] = db_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)

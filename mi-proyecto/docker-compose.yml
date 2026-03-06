@@ -4,6 +4,11 @@ networks:
   tienda_network:
     driver: bridge
 
+volumes:
+  # Volumen nombrado para la BD SQLite — Docker gestiona los permisos
+  # correctamente y appuser puede escribir sin problemas.
+  sqlite_data:
+
 services:
   backend:
     build: ./backend
@@ -13,7 +18,9 @@ services:
     env_file:
       - .env
     volumes:
-      - ./backend:/app
+      # Solo montamos la carpeta de la BD, NO todo /app.
+      # Montar ./backend:/app sobreescribía los permisos del chown del Dockerfile.
+      - sqlite_data:/app/instance
     networks:
       - tienda_network
 
@@ -22,8 +29,6 @@ services:
     container_name: tienda_frontend
     ports:
       - "8080:80"
-    volumes:
-      - ./frontend:/usr/share/nginx/html
     depends_on:
       - backend
     networks:

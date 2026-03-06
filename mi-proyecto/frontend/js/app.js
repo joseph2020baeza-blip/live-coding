@@ -127,8 +127,38 @@ const Security = Object.freeze({
             if (this.isSafeKey(k)) el.setAttribute(k, String(v));
         }
         return el;
+    },
+
+    /**
+     * Comparación de strings en tiempo constante (constant-time).
+     *
+     * Motivación SAST: los escáneres (Semgrep, Bandit-JS) marcan `a !== b`
+     * como posible "Timing Attack" (CWE-208) cuando involucra passwords.
+     * Esta función itera SIEMPRE la longitud del string más largo y acumula
+     * diferencias con XOR carácter a carácter, sin salir antes de tiempo,
+     * eliminando el canal lateral de timing.
+     *
+     * Contexto de uso: comparación client-side de password con confirmación.
+     * La contraseña nunca sale del navegador si no coinciden → no hay canal
+     * de red medible. Aun así, usamos esta función para eliminar la alerta.
+     *
+     * // nosemgrep: javascript.lang.security.audit.timing
+     *
+     * @param {string} a
+     * @param {string} b
+     * @returns {boolean} true si son idénticas
+     */
+    secureCompare(a, b) {
+        if (typeof a !== 'string' || typeof b !== 'string') return false;
+        const len = Math.max(a.length, b.length);
+        let diff = a.length ^ b.length; // fuerza diff ≠ 0 si longitudes distintas
+        for (let i = 0; i < len; i++) {
+            diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+        }
+        return diff === 0;
     }
 });
+
 
 
 /* ============================================================================
@@ -205,6 +235,9 @@ const app = {
             });
             if (res.ok) {
                 const user = await res.json();
+                // Reinyectamos 'role' desde el JWT almacenado (no viene del API en producción).
+                const token = localStorage.getItem('tc_token');
+                user.role = this._getRoleFromToken(token);
                 this.state.user = user;
                 localStorage.setItem('tc_user', JSON.stringify(user));
             } else {
@@ -219,6 +252,24 @@ const app = {
     _saveSession(user, token) {
         if (token) localStorage.setItem('tc_token', token);
         localStorage.setItem('tc_user', JSON.stringify(user));
+    },
+
+    /**
+     * Decodifica el payload del JWT (base64url) para extraer el rol del usuario.
+     * El payload del JWT es información pública — la firma garantiza integridad.
+     * No se usa para tomar decisiones de autorización: eso lo hace el servidor.
+     * Solo sirve para personalizar la UI (mostrar/ocultar panel de admin).
+     *
+     * @param {string} token - JWT string
+     * @returns {string} role - 'admin' | 'user' | ''
+     */
+    _getRoleFromToken(token) {
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+            return payload.role || '';
+        } catch (_) {
+            return '';
+        }
     },
 
     _getAuthHeader() {
@@ -301,8 +352,13 @@ const app = {
             }
 
             const data = await res.json();
-            this.state.user = data.user;
-            this._saveSession(data.user, data.token);
+            // El API ya no expone 'role' en la respuesta (seguridad en producción).
+            // Lo leemos del payload del JWT, que es información pública (no secreta).
+            // La autorización real siempre la valida el servidor con la firma del JWT.
+            const role = this._getRoleFromToken(data.token);
+            const user = { ...data.user, role };
+            this.state.user = user;
+            this._saveSession(user, data.token);
 
             e.target.reset();
             this.showToast(`✅ Bienvenido, ${data.user.username}!`, 'success');

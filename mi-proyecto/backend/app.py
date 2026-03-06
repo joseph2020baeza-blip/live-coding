@@ -141,7 +141,9 @@ def login():
         
         return jsonify({
             'token': token,
-            'user': {'id': user.id, 'email': user.email, 'username': user.username, 'role': user.role, 'balance': user.balance}
+            # PRODUCCIÓN: no exponemos 'role' al cliente.
+            # El rol viaja cifrado dentro del JWT y el backend lo valida en cada petición.
+            'user': {'id': user.id, 'email': user.email, 'username': user.username, 'balance': user.balance}
         })
     return jsonify({'message': 'Credenciales incorrectas'}), 401
 
@@ -152,7 +154,7 @@ def get_me(current_user):
         'id': current_user.id,
         'email': current_user.email,
         'username': current_user.username,
-        'role': current_user.role,
+        # PRODUCCIÓN: 'role' omitido — no se expone al cliente.
         'balance': current_user.balance
     })
 

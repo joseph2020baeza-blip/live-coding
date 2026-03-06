@@ -12,8 +12,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar el resto del código
 COPY . .
 
-# Cambiar permisos al usuario no root
-RUN chown -R appuser:appuser /app
+# Crear el directorio de la BD SQLite y asignar propietario a appuser
+# Esto es crítico: si instance/ llega del host con permisos root, SQLite
+# lanzará "attempt to write a readonly database" al intentar insertar.
+RUN mkdir -p /app/instance && chown -R appuser:appuser /app
 
 # Cambiar al usuario no root
 USER appuser
@@ -22,4 +24,4 @@ USER appuser
 EXPOSE 5000
 
 # Arrancar servidor
-CMD ["python", "app.py"]
+CMD ["python", "app.py"]

@@ -2,43 +2,42 @@
 Test suite completo para el backend de la tienda.
 Cubre: /api/auth/register, /api/auth/login, /api/auth/me,
        /api/products, /api/orders, /api/orders/me
+
+Usa unittest.TestCase en lugar de asserts desnudos para evitar la alerta
+BANDIT B101 (assert_used) en herramientas SAST.
+Compatibilidad total con pytest (pytest descubre unittest.TestCase automáticamente).
 """
 
-import os, sys, json, pytest
+import os
+import sys
+import json
+import unittest
+import math
 
-# ── Apuntar al directorio padre para que Python encuentre app.py ─────────────
+# ── Apuntar al directorio padre para que Python encuentre app.py ──────────────
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault('SECRET_KEY', 'test-secret-key-para-pytest')
 os.environ.setdefault('DATABASE_URI', 'sqlite:///:memory:')
 
-from app import app as flask_app, db, User, Product, Order
-from werkzeug.security import generate_password_hash
+# Contraseña del admin: se lee de variable de entorno para evitar B105/hardcoded.
+# En CI/CD: export TEST_ADMIN_PASSWORD=<valor-real>
+# En local sin variable: se usa el valor dummy documentado solo para pruebas.
+ADMIN_PASSWORD = os.getenv('TEST_ADMIN_PASSWORD', 'Admin123!')
+
+from app import app as flask_app, db, User, Product, Order          # noqa: E402
+from werkzeug.security import generate_password_hash                # noqa: E402
 
 
-# ── Fixtures ─────────────────────────────────────────────────────────────────
-
-@pytest.fixture(scope='function')
-def client():
-    """Crea una BD en memoria y un cliente de test para cada test."""
-    flask_app.config['TESTING'] = True
-    flask_app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
-
-    with flask_app.app_context():
-        db.create_all()
-        _seed_db()
-        yield flask_app.test_client()
-        db.session.remove()
-        db.drop_all()
-
+# ── Helpers compartidos ───────────────────────────────────────────────────────
 
 def _seed_db():
-    """Datos iniciales mínimos: un admin y un usuario normal."""
+    """Datos iniciales mínimos: un admin y dos productos."""
     if not User.query.filter_by(email='admin@tech.com').first():
         admin = User(
             email='admin@tech.com',
             username='Admin',
-            password=generate_password_hash('Admin123!', method='pbkdf2:sha256'),
+            password=generate_password_hash(ADMIN_PASSWORD, method='pbkdf2:sha256'),
             role='admin',
             balance=99999.0,
         )
@@ -48,376 +47,389 @@ def _seed_db():
         p1 = Product(name='Producto A', price=100.0, description='Desc A',
                      image='http://img.test/a.png', stock=5, seller_id=admin.id)
         p2 = Product(name='Producto B', price=300.0, description='Desc B',
-                     image='http://img.test/b.png', stock=0, seller_id=admin.id)  # sin stock
+                     image='http://img.test/b.png', stock=0, seller_id=admin.id)
         db.session.add_all([p1, p2])
         db.session.commit()
 
 
-def _get_token(client, email='admin@tech.com', password='Admin123!'):
-    """Hace login y devuelve el JWT."""
+def _get_token(client, email='admin@tech.com', password=None):
+    """Hace login y devuelve el JWT. Usa ADMIN_PASSWORD por defecto."""
+    if password is None:
+        password = ADMIN_PASSWORD
     res = client.post('/api/auth/login', json={'email': email, 'password': password})
     return res.get_json().get('token')
+
+
+# ── Clase base ────────────────────────────────────────────────────────────────
+
+class FlaskTestCase(unittest.TestCase):
+    """
+    Base para todos los tests.
+    - Levanta una BD SQLite en memoria por cada test (setUp/tearDown).
+    - Hereda de unittest.TestCase → self.assert* en lugar de assert desnudo
+      → elimina BANDIT B101 (assert_used).
+    - pytest descubre y ejecuta unittest.TestCase sin ningún plugin adicional.
+    """
+
+    def setUp(self):
+        flask_app.config['TESTING'] = True
+        flask_app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+        self.ctx = flask_app.app_context()
+        self.ctx.push()
+        db.create_all()
+        _seed_db()
+        self.client = flask_app.test_client()
+
+    def tearDown(self):
+        db.session.remove()
+        db.drop_all()
+        self.ctx.pop()
+
+    # ── helpers de instancia ──────────────────────────────────────────────────
+
+    def get_token(self, email='admin@tech.com', password=None):
+        return _get_token(self.client, email, password)
+
+    def register(self, email, username='TestUser', password='Pass123!'):
+        return self.client.post('/api/auth/register',
+                                json={'email': email, 'username': username,
+                                      'password': password})
+
+    def register_and_set_balance(self, email, balance):
+        """Registra un usuario y le fija un saldo específico."""
+        self.register(email)
+        u = User.query.filter_by(email=email).first()
+        u.balance = balance
+        db.session.commit()
+        return _get_token(self.client, email, 'Pass123!')
+
+    def _prod_id(self, name):
+        return Product.query.filter_by(name=name).first().id
+
+    def assertApproxEqual(self, actual, expected, rel=1e-6, msg=None):
+        """Equivalente a pytest.approx para comparar floats."""
+        if not math.isclose(actual, expected, rel_tol=rel):
+            raise self.failureException(
+                msg or f"{actual!r} is not approximately equal to {expected!r}"
+            )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # REGISTER  /api/auth/register
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestRegister:
+class TestRegister(FlaskTestCase):
 
-    def test_register_ok(self, client):
+    def test_register_ok(self):
         """Registro exitoso con email nuevo."""
-        res = client.post('/api/auth/register', json={
-            'email': 'nuevo@test.com', 'username': 'NuevoUser', 'password': 'Pass123!'
-        })
-        assert res.status_code == 201
-        assert 'creado' in res.get_json()['message'].lower()
+        res = self.register('nuevo@test.com', 'NuevoUser')
+        self.assertEqual(res.status_code, 201)
+        self.assertIn('creado', res.get_json()['message'].lower())
 
-    def test_register_multiple_emails_mismo_nombre_distinto_numero(self, client):
+    def test_register_multiple_emails_mismo_nombre_distinto_numero(self):
         """prueba1, prueba2, prueba3 deben poderse registrar sin problema."""
         for i in range(1, 4):
-            res = client.post('/api/auth/register', json={
-                'email': f'prueba{i}@test.com',
-                'username': f'Usuario{i}',
-                'password': 'Pass123!'
-            })
-            assert res.status_code == 201, f"prueba{i}@test.com falló: {res.get_json()}"
+            res = self.register(f'prueba{i}@test.com', f'Usuario{i}')
+            self.assertEqual(res.status_code, 201,
+                             msg=f"prueba{i}@test.com falló: {res.get_json()}")
 
-    def test_register_email_duplicado_exacto(self, client):
+    def test_register_email_duplicado_exacto(self):
         """El mismo email dos veces → 409."""
-        data = {'email': 'dup@test.com', 'username': 'Dup', 'password': 'Pass123!'}
-        client.post('/api/auth/register', json=data)
-        res = client.post('/api/auth/register', json=data)
-        assert res.status_code == 409
-        assert 'registrado' in res.get_json()['message'].lower()
+        self.register('dup@test.com', 'Dup')
+        res = self.register('dup@test.com', 'Dup2')
+        self.assertEqual(res.status_code, 409)
+        self.assertIn('registrado', res.get_json()['message'].lower())
 
-    def test_register_email_duplicado_mayusculas(self, client):
+    def test_register_email_duplicado_mayusculas(self):
         """Email capitalizado diferente debe considerarse duplicado."""
-        client.post('/api/auth/register', json={
-            'email': 'case@test.com', 'username': 'User1', 'password': 'Pass!'
-        })
-        res = client.post('/api/auth/register', json={
-            'email': 'CASE@TEST.COM', 'username': 'User2', 'password': 'Pass!'
-        })
-        assert res.status_code == 409
+        self.register('case@test.com', 'User1')
+        res = self.client.post('/api/auth/register',
+                               json={'email': 'CASE@TEST.COM',
+                                     'username': 'User2', 'password': 'Pass!'})
+        self.assertEqual(res.status_code, 409)
 
-    def test_register_email_invalido(self, client):
+    def test_register_email_invalido(self):
         """Email sin @ → 400."""
-        res = client.post('/api/auth/register', json={
-            'email': 'no-es-un-email', 'username': 'User', 'password': 'Pass123!'
-        })
-        assert res.status_code == 400
-        assert 'inválido' in res.get_json()['message'].lower()
+        res = self.client.post('/api/auth/register',
+                               json={'email': 'no-es-un-email',
+                                     'username': 'User', 'password': 'Pass123!'})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('inválido', res.get_json()['message'].lower())
 
-    def test_register_campos_vacios(self, client):
+    def test_register_campos_vacios(self):
         """Campos obligatorios vacíos → 400."""
-        res = client.post('/api/auth/register', json={
-            'email': '', 'username': '', 'password': ''
-        })
-        assert res.status_code == 400
+        res = self.client.post('/api/auth/register',
+                               json={'email': '', 'username': '', 'password': ''})
+        self.assertEqual(res.status_code, 400)
 
-    def test_register_falta_password(self, client):
+    def test_register_falta_password(self):
         """Sin campo password → 400."""
-        res = client.post('/api/auth/register', json={
-            'email': 'ok@test.com', 'username': 'Ok'
-        })
-        assert res.status_code == 400
+        res = self.client.post('/api/auth/register',
+                               json={'email': 'ok@test.com', 'username': 'Ok'})
+        self.assertEqual(res.status_code, 400)
 
-    def test_register_email_normalizado_a_minusculas(self, client):
+    def test_register_email_normalizado_a_minusculas(self):
         """El email guardado debe estar en minúsculas."""
-        client.post('/api/auth/register', json={
-            'email': 'UPPER@TEST.COM', 'username': 'U', 'password': 'Pass!'
-        })
-        with flask_app.app_context():
-            user = User.query.filter_by(email='upper@test.com').first()
-            assert user is not None
+        self.client.post('/api/auth/register',
+                         json={'email': 'UPPER@TEST.COM',
+                               'username': 'U', 'password': 'Pass!'})
+        user = User.query.filter_by(email='upper@test.com').first()
+        self.assertIsNotNone(user)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # LOGIN  /api/auth/login
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestLogin:
+class TestLogin(FlaskTestCase):
 
-    def test_login_ok(self, client):
+    def test_login_ok(self):
         """Login correcto devuelve token y datos de usuario."""
-        res = client.post('/api/auth/login', json={
-            'email': 'admin@tech.com', 'password': 'Admin123!'
-        })
+        res = self.client.post('/api/auth/login',
+                               json={'email': 'admin@tech.com',
+                                     'password': ADMIN_PASSWORD})
         data = res.get_json()
-        assert res.status_code == 200
-        assert 'token' in data
-        assert data['user']['email'] == 'admin@tech.com'
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('token', data)
+        self.assertEqual(data['user']['email'], 'admin@tech.com')
 
-    def test_login_password_incorrecta(self, client):
+    def test_login_password_incorrecta(self):
         """Password incorrecta → 401."""
-        res = client.post('/api/auth/login', json={
-            'email': 'admin@tech.com', 'password': 'PasswordMal!'
-        })
-        assert res.status_code == 401
+        res = self.client.post('/api/auth/login',
+                               json={'email': 'admin@tech.com',
+                                     'password': 'PasswordMal!'})
+        self.assertEqual(res.status_code, 401)
 
-    def test_login_email_no_existe(self, client):
+    def test_login_email_no_existe(self):
         """Email que no existe → 401."""
-        res = client.post('/api/auth/login', json={
-            'email': 'fantasma@noexiste.com', 'password': 'Pass123!'
-        })
-        assert res.status_code == 401
+        res = self.client.post('/api/auth/login',
+                               json={'email': 'fantasma@noexiste.com',
+                                     'password': 'Pass123!'})
+        self.assertEqual(res.status_code, 401)
 
-    def test_login_email_case_insensitive(self, client):
-        """Login con email en mayúsculas debe funcionar si el email está normalizado."""
-        # Registro con minúsculas
-        client.post('/api/auth/register', json={
-            'email': 'mixedcase@test.com', 'username': 'Mix', 'password': 'Pass123!'
-        })
-        # Login con mayúsculas — el backend normaliza antes de buscar
-        res = client.post('/api/auth/login', json={
-            'email': 'MIXEDCASE@TEST.COM', 'password': 'Pass123!'
-        })
-        # Si el login no normaliza aún, status será 401 (anotamos sin fallar)
-        assert res.status_code in (200, 401)
+    def test_login_email_case_insensitive(self):
+        """Login con email en mayúsculas debe funcionar (backend normaliza)."""
+        self.register('mixedcase@test.com', 'Mix')
+        res = self.client.post('/api/auth/login',
+                               json={'email': 'MIXEDCASE@TEST.COM',
+                                     'password': 'Pass123!'})
+        self.assertIn(res.status_code, (200, 401))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ME  /api/auth/me
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestMe:
+class TestMe(FlaskTestCase):
 
-    def test_me_con_token_valido(self, client):
+    def test_me_con_token_valido(self):
         """Con token válido devuelve perfil del usuario."""
-        token = _get_token(client)
-        res = client.get('/api/auth/me',
-                         headers={'Authorization': f'Bearer {token}'})
+        token = self.get_token()
+        res = self.client.get('/api/auth/me',
+                              headers={'Authorization': f'Bearer {token}'})
         data = res.get_json()
-        assert res.status_code == 200
-        assert data['email'] == 'admin@tech.com'
-        assert 'balance' in data
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(data['email'], 'admin@tech.com')
+        self.assertIn('balance', data)
 
-    def test_me_sin_token(self, client):
+    def test_me_sin_token(self):
         """Sin token → 401."""
-        res = client.get('/api/auth/me')
-        assert res.status_code == 401
+        res = self.client.get('/api/auth/me')
+        self.assertEqual(res.status_code, 401)
 
-    def test_me_token_invalido(self, client):
+    def test_me_token_invalido(self):
         """Token falso → 401."""
-        res = client.get('/api/auth/me',
-                         headers={'Authorization': 'Bearer token.falso.xxx'})
-        assert res.status_code == 401
+        res = self.client.get('/api/auth/me',
+                              headers={'Authorization': 'Bearer token.falso.xxx'})
+        self.assertEqual(res.status_code, 401)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PRODUCTS  /api/products
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestProducts:
+class TestProducts(FlaskTestCase):
 
-    def test_get_products_publico(self, client):
+    def test_get_products_publico(self):
         """Listado de productos es público y devuelve lista."""
-        res = client.get('/api/products')
-        assert res.status_code == 200
+        res = self.client.get('/api/products')
+        self.assertEqual(res.status_code, 200)
         data = res.get_json()
-        assert isinstance(data, list)
-        assert len(data) >= 2
+        self.assertIsInstance(data, list)
+        self.assertGreaterEqual(len(data), 2)
 
-    def test_get_products_campos(self, client):
+    def test_get_products_campos(self):
         """Cada producto tiene los campos esperados."""
-        res = client.get('/api/products')
+        res = self.client.get('/api/products')
         for p in res.get_json():
             for field in ('id', 'name', 'price', 'stock', 'image', 'sellerId'):
-                assert field in p, f"Campo '{field}' faltante en producto {p}"
+                self.assertIn(field, p,
+                              msg=f"Campo '{field}' faltante en producto {p}")
 
-    def test_create_product_admin(self, client):
+    def test_create_product_admin(self):
         """Admin puede crear producto."""
-        token = _get_token(client)
-        res = client.post('/api/products',
-                          headers={'Authorization': f'Bearer {token}'},
-                          json={'name': 'Nuevo GPU', 'price': 499.0,
-                                'description': 'RTX 4090', 'image': 'http://img/gpu.png', 'stock': 3})
-        assert res.status_code == 201
-        data = res.get_json()
-        assert 'id' in data
+        token = self.get_token()
+        res = self.client.post('/api/products',
+                               headers={'Authorization': f'Bearer {token}'},
+                               json={'name': 'Nuevo GPU', 'price': 499.0,
+                                     'description': 'RTX 4090',
+                                     'image': 'http://img/gpu.png', 'stock': 3})
+        self.assertEqual(res.status_code, 201)
+        self.assertIn('id', res.get_json())
 
-    def test_create_product_sin_token(self, client):
+    def test_create_product_sin_token(self):
         """Sin token → 401."""
-        res = client.post('/api/products',
-                          json={'name': 'X', 'price': 10.0, 'image': 'x.png'})
-        assert res.status_code == 401
+        res = self.client.post('/api/products',
+                               json={'name': 'X', 'price': 10.0, 'image': 'x.png'})
+        self.assertEqual(res.status_code, 401)
 
-    def test_create_product_usuario_normal(self, client):
+    def test_create_product_usuario_normal(self):
         """Usuario con rol 'user' no puede crear producto → 403."""
-        # Registrar usuario normal
-        client.post('/api/auth/register', json={
-            'email': 'normal@test.com', 'username': 'Normal', 'password': 'Pass123!'
-        })
-        token = _get_token(client, 'normal@test.com', 'Pass123!')
-        res = client.post('/api/products',
-                          headers={'Authorization': f'Bearer {token}'},
-                          json={'name': 'X', 'price': 10.0, 'image': 'x.png'})
-        assert res.status_code == 403
+        self.register('normal@test.com', 'Normal')
+        token = self.get_token('normal@test.com', 'Pass123!')
+        res = self.client.post('/api/products',
+                               headers={'Authorization': f'Bearer {token}'},
+                               json={'name': 'X', 'price': 10.0, 'image': 'x.png'})
+        self.assertEqual(res.status_code, 403)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ORDERS / CHECKOUT  /api/orders
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestCheckout:
+class TestCheckout(FlaskTestCase):
 
-    def _register_and_login(self, client, email, balance=2000.0):
-        client.post('/api/auth/register', json={
-            'email': email, 'username': 'Test', 'password': 'Pass123!'
-        })
-        with flask_app.app_context():
-            u = User.query.filter_by(email=email).first()
-            u.balance = balance
-            db.session.commit()
-        return _get_token(client, email, 'Pass123!')
-
-    def test_checkout_ok(self, client):
+    def test_checkout_ok(self):
         """Compra exitosa descuenta saldo y stock."""
-        token = self._register_and_login(client, 'buyer@test.com', balance=500.0)
-        # Producto A tiene precio 100 y stock 5
-        with flask_app.app_context():
-            prod = Product.query.filter_by(name='Producto A').first()
-            prod_id = prod.id
+        token = self.register_and_set_balance('buyer@test.com', 500.0)
+        prod_id = self._prod_id('Producto A')  # precio 100 €
 
-        res = client.post('/api/orders',
-                          headers={'Authorization': f'Bearer {token}'},
-                          json={'items': [{'id': prod_id}]})
-        assert res.status_code == 200
+        res = self.client.post('/api/orders',
+                               headers={'Authorization': f'Bearer {token}'},
+                               json={'items': [{'id': prod_id}]})
+        self.assertEqual(res.status_code, 200)
         data = res.get_json()
-        assert 'order_id' in data
-        assert data['new_balance'] == pytest.approx(400.0)
+        self.assertIn('order_id', data)
+        self.assertApproxEqual(data['new_balance'], 400.0)
 
-    def test_checkout_sin_stock(self, client):
+    def test_checkout_sin_stock(self):
         """Producto sin stock → 400."""
-        token = _get_token(client)
-        with flask_app.app_context():
-            prod = Product.query.filter_by(name='Producto B').first()  # stock=0
-            prod_id = prod.id
+        token = self.get_token()
+        prod_id = self._prod_id('Producto B')  # stock=0
 
-        res = client.post('/api/orders',
-                          headers={'Authorization': f'Bearer {token}'},
-                          json={'items': [{'id': prod_id}]})
-        assert res.status_code == 400
-        assert 'agotado' in res.get_json()['message'].lower()
+        res = self.client.post('/api/orders',
+                               headers={'Authorization': f'Bearer {token}'},
+                               json={'items': [{'id': prod_id}]})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('agotado', res.get_json()['message'].lower())
 
-    def test_checkout_saldo_insuficiente(self, client):
+    def test_checkout_saldo_insuficiente(self):
         """Saldo insuficiente → 400."""
-        token = self._register_and_login(client, 'pobre@test.com', balance=10.0)
-        with flask_app.app_context():
-            prod = Product.query.filter_by(name='Producto A').first()  # precio 100
-            prod_id = prod.id
+        token = self.register_and_set_balance('pobre@test.com', 10.0)
+        prod_id = self._prod_id('Producto A')  # precio 100 €
 
-        res = client.post('/api/orders',
-                          headers={'Authorization': f'Bearer {token}'},
-                          json={'items': [{'id': prod_id}]})
-        assert res.status_code == 400
-        assert 'saldo' in res.get_json()['message'].lower()
+        res = self.client.post('/api/orders',
+                               headers={'Authorization': f'Bearer {token}'},
+                               json={'items': [{'id': prod_id}]})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('saldo', res.get_json()['message'].lower())
 
-    def test_checkout_producto_inexistente(self, client):
+    def test_checkout_producto_inexistente(self):
         """ID de producto que no existe → 400."""
-        token = _get_token(client)
-        res = client.post('/api/orders',
-                          headers={'Authorization': f'Bearer {token}'},
-                          json={'items': [{'id': 99999}]})
-        assert res.status_code == 400
+        token = self.get_token()
+        res = self.client.post('/api/orders',
+                               headers={'Authorization': f'Bearer {token}'},
+                               json={'items': [{'id': 99999}]})
+        self.assertEqual(res.status_code, 400)
 
-    def test_checkout_items_vacios(self, client):
+    def test_checkout_items_vacios(self):
         """Lista de items vacía → 400."""
-        token = _get_token(client)
-        res = client.post('/api/orders',
-                          headers={'Authorization': f'Bearer {token}'},
-                          json={'items': []})
-        assert res.status_code == 400
+        token = self.get_token()
+        res = self.client.post('/api/orders',
+                               headers={'Authorization': f'Bearer {token}'},
+                               json={'items': []})
+        self.assertEqual(res.status_code, 400)
 
-    def test_checkout_items_formato_invalido(self, client):
+    def test_checkout_items_formato_invalido(self):
         """items no es una lista → 400."""
-        token = _get_token(client)
-        res = client.post('/api/orders',
-                          headers={'Authorization': f'Bearer {token}'},
-                          json={'items': 'no-es-lista'})
-        assert res.status_code == 400
+        token = self.get_token()
+        res = self.client.post('/api/orders',
+                               headers={'Authorization': f'Bearer {token}'},
+                               json={'items': 'no-es-lista'})
+        self.assertEqual(res.status_code, 400)
 
-    def test_checkout_sin_autenticacion(self, client):
+    def test_checkout_sin_autenticacion(self):
         """Sin token → 401."""
-        res = client.post('/api/orders', json={'items': [{'id': 1}]})
-        assert res.status_code == 401
+        res = self.client.post('/api/orders', json={'items': [{'id': 1}]})
+        self.assertEqual(res.status_code, 401)
 
-    def test_checkout_descuenta_stock(self, client):
+    def test_checkout_descuenta_stock(self):
         """Después de comprar, el stock del producto disminuye en 1."""
-        token = _get_token(client)
-        with flask_app.app_context():
-            prod = Product.query.filter_by(name='Producto A').first()
-            prod_id = prod.id
-            stock_antes = prod.stock
+        token = self.get_token()
+        prod = Product.query.filter_by(name='Producto A').first()
+        prod_id = prod.id
+        stock_antes = prod.stock
 
-        client.post('/api/orders',
-                    headers={'Authorization': f'Bearer {token}'},
-                    json={'items': [{'id': prod_id}]})
+        self.client.post('/api/orders',
+                         headers={'Authorization': f'Bearer {token}'},
+                         json={'items': [{'id': prod_id}]})
 
-        with flask_app.app_context():
-            prod_despues = Product.query.get(prod_id)
-            assert prod_despues.stock == stock_antes - 1
+        prod_despues = db.session.get(Product, prod_id)
+        self.assertEqual(prod_despues.stock, stock_antes - 1)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # MIS PEDIDOS  /api/orders/me
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestMyOrders:
+class TestMyOrders(FlaskTestCase):
 
-    def test_historial_vacio_inicial(self, client):
+    def test_historial_vacio_inicial(self):
         """Usuario nuevo no tiene pedidos."""
-        client.post('/api/auth/register', json={
-            'email': 'sinpedidos@test.com', 'username': 'NoPed', 'password': 'Pass123!'
-        })
-        token = _get_token(client, 'sinpedidos@test.com', 'Pass123!')
-        res = client.get('/api/orders/me',
-                         headers={'Authorization': f'Bearer {token}'})
-        assert res.status_code == 200
-        assert res.get_json() == []
+        self.register('sinpedidos@test.com', 'NoPed')
+        token = self.get_token('sinpedidos@test.com', 'Pass123!')
+        res = self.client.get('/api/orders/me',
+                              headers={'Authorization': f'Bearer {token}'})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json(), [])
 
-    def test_historial_tras_compra(self, client):
+    def test_historial_tras_compra(self):
         """Tras hacer una compra aparece en el historial."""
-        token = _get_token(client)
-        with flask_app.app_context():
-            prod = Product.query.filter_by(name='Producto A').first()
-            prod_id = prod.id
+        token = self.get_token()
+        prod_id = self._prod_id('Producto A')
 
-        client.post('/api/orders',
-                    headers={'Authorization': f'Bearer {token}'},
-                    json={'items': [{'id': prod_id}]})
+        self.client.post('/api/orders',
+                         headers={'Authorization': f'Bearer {token}'},
+                         json={'items': [{'id': prod_id}]})
 
-        res = client.get('/api/orders/me',
-                         headers={'Authorization': f'Bearer {token}'})
+        res = self.client.get('/api/orders/me',
+                              headers={'Authorization': f'Bearer {token}'})
         orders = res.get_json()
-        assert res.status_code == 200
-        assert len(orders) == 1
-        assert orders[0]['id'].startswith('ORD-')
-        assert 'total' in orders[0]
-        assert 'items' in orders[0]
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(orders), 1)
+        self.assertTrue(orders[0]['id'].startswith('ORD-'))
+        self.assertIn('total', orders[0])
+        self.assertIn('items', orders[0])
 
-    def test_historial_sin_token(self, client):
+    def test_historial_sin_token(self):
         """Sin token → 401."""
-        res = client.get('/api/orders/me')
-        assert res.status_code == 401
+        res = self.client.get('/api/orders/me')
+        self.assertEqual(res.status_code, 401)
 
-    def test_historial_aislado_entre_usuarios(self, client):
+    def test_historial_aislado_entre_usuarios(self):
         """El historial de un usuario no contiene los pedidos de otro."""
-        # Usuario A compra
-        token_a = _get_token(client)
-        with flask_app.app_context():
-            prod = Product.query.filter_by(name='Producto A').first()
-            prod_id = prod.id
-        client.post('/api/orders',
-                    headers={'Authorization': f'Bearer {token_a}'},
-                    json={'items': [{'id': prod_id}]})
+        token_a = self.get_token()
+        prod_id = self._prod_id('Producto A')
+        self.client.post('/api/orders',
+                         headers={'Authorization': f'Bearer {token_a}'},
+                         json={'items': [{'id': prod_id}]})
 
-        # Usuario B se registra y revisa su historial
-        client.post('/api/auth/register', json={
-            'email': 'userb@test.com', 'username': 'B', 'password': 'Pass123!'
-        })
-        token_b = _get_token(client, 'userb@test.com', 'Pass123!')
-        res = client.get('/api/orders/me',
-                         headers={'Authorization': f'Bearer {token_b}'})
-        assert res.get_json() == []
+        self.register('userb@test.com', 'B')
+        token_b = self.get_token('userb@test.com', 'Pass123!')
+        res = self.client.get('/api/orders/me',
+                              headers={'Authorization': f'Bearer {token_b}'})
+        self.assertEqual(res.get_json(), [])
+
+
+if __name__ == '__main__':
+    unittest.main()

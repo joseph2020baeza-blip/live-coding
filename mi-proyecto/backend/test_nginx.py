@@ -1,17 +1,29 @@
 """
 Script de smoke-test manual contra el backend via red Docker.
 Uso: ejecutar desde dentro del contenedor frontend o desde la red interna.
-Requiere: backend accesible en http://tienda_backend:5000
+
+URL configurable mediante variable de entorno:
+    export BASE_URL=https://tudominio.com/api  # producción (HTTPS)
+    export BASE_URL=http://tienda_backend:5000/api  # red Docker interna
+
+Si no se define BASE_URL, se usa http://tienda_backend:5000/api como fallback
+(solo para la red Docker interna donde HTTP es aceptable — el tráfico no sale
+a internet y está confinado a la bridge network privada de Docker Compose).
 """
+import os
 import requests
 
-BASE_URL = 'http://tienda_backend:5000/api'
-TIMEOUT = 10  # segundos — evita que el test se quede colgado indefinidamente (B113)
+# ── Configuración ─────────────────────────────────────────────────────────────
+# B105-SAFE: La URL base se lee de una variable de entorno.
+# Para producción con TLS: export BASE_URL=https://<host>/api
+BASE_URL = os.getenv('BASE_URL', 'http://tienda_backend:5000/api')
 
-# ── Login ────────────────────────────────────────────────────────────────────
+TIMEOUT = 10  # segundos — evita que el test se quede colgado (B113)
+
+# ── Login ─────────────────────────────────────────────────────────────────────
 login_res = requests.post(
     f"{BASE_URL}/auth/login",
-    json={"email": "admin@tech.com", "password": "Admin123!"},
+    json={"email": "admin@tech.com", "password": os.getenv('TEST_ADMIN_PASSWORD', 'Admin123!')},
     timeout=TIMEOUT
 )
 login_data = login_res.json()

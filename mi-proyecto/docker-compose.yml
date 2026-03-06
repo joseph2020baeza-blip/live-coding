@@ -1,20 +1,25 @@
 version: '3.8'
 
+networks:
+  tienda_network:
+    driver: bridge
+
 services:
   backend:
     build: ./backend
     container_name: tienda_backend
     ports:
       - "5000:5000"
-    # COPIA ESTO EXACTAMENTE:
     environment:
       - GOOGLE_CLIENT_ID=1028547201522-k75746u9n3t3svgqiksed5uleoso8sjd.apps.googleusercontent.com
       - GOOGLE_CLIENT_SECRET=GOCSPX-V2gxGAMMPn4X7TReKl4fEe3HY8s
     volumes:
       - ./backend:/app
+    networks:
+      - tienda_network
 
   frontend:
-    image: nginx:alpine
+    build: ./frontend
     container_name: tienda_frontend
     ports:
       - "8080:80"
@@ -22,3 +27,5 @@ services:
       - ./frontend:/usr/share/nginx/html
     depends_on:
       - backend
+    networks:
+      - tienda_network

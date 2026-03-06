@@ -15,13 +15,13 @@
 
 /* ============================================================================
  * ██████╗  CAPA 0 — API REST (Reemplazando MockDB)
- * ██╔══██╗ Comunicación con backend real Python/Flask.
+ * ██╔══██╗ Comunicación con backend real Python/Flask vía proxy en Nginx.
  * ██║  ██║
  * ██║  ██║
  * ██████╔╝
  * ╚═════╝ 
  * ============================================================================ */
-const API_BASE = 'http://localhost:5000/api';
+const API_BASE = '/api';
 
 
 /* ============================================================================
@@ -157,18 +157,6 @@ const app = {
 
     // ── 2.2  Inicialización ───────────────────────────────────────────────────
     async init() {
-        // [OAUTH REAL] Capturar Token desde la URL después del redirect de Google
-        const params = new URLSearchParams(window.location.search);
-        const tokenFromUrl = params.get('tc_token');
-
-        if (tokenFromUrl) {
-            localStorage.setItem('tc_token', tokenFromUrl);
-            // Limpia la URL para que quede limpia (estética y seguridad)
-            window.history.replaceState({}, document.title, window.location.pathname);
-            this.showToast("✅ Sesión iniciada con Google", "success");
-        }
-
-
         // 2. Cachear referencias DOM críticas
         this.ui = {
             views: {
@@ -483,8 +471,8 @@ const app = {
     async checkout() {
         if (!this.state.user || this.state.cart.length === 0) return;
 
-        const cartSnapshot = [...this.state.cart];
-        const total = cartSnapshot.reduce((sum, item) => sum + item.price, 0);
+        // Snapshot del carrito con SOLO los datos estrictamente necesarios (id)
+        const itemsPayload = this.state.cart.map(item => ({ id: item.id }));
 
         try {
             const res = await fetch(`${API_BASE}/orders`, {
@@ -494,8 +482,7 @@ const app = {
                     ...this._getAuthHeader()
                 },
                 body: JSON.stringify({
-                    items: cartSnapshot,
-                    total: parseFloat(total.toFixed(2))
+                    items: itemsPayload
                 })
             });
 
@@ -869,8 +856,7 @@ Object.assign(app, {
         // Estado del botón checkout
         const btn = this.ui.btnCheckout;
         if (btn && this.state.user) {
-            const fresh = MockDB.users.findById(this.state.user.id);
-            const balance = fresh?.balance ?? 0;
+            const balance = this.state.user.balance ?? 0;
 
             if (total > balance) {
                 btn.textContent = `Sin saldo (faltan ${(total - balance).toFixed(2)}€)`;

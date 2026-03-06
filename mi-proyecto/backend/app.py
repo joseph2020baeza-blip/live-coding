@@ -9,8 +9,7 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 import datetime
-from authlib.integrations.flask_client import OAuth
-from flask import redirect
+import secrets
 
 app = Flask(__name__)
 CORS(app)
@@ -18,24 +17,12 @@ CORS(app)
 basedir = os.path.abspath(os.path.dirname(__file__))
 
 # ── Configuración única ──────────────────────────────────────────────────────
-app.config['SECRET_KEY'] = 'HACKATHON_SUPER_SECRET_KEY'
+# Si no hay SECRET_KEY en las variables de entorno, genera una segura dinámicamente
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'instance', 'tienda.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-# Credenciales OAuth leídas del entorno (inyectadas por docker-compose.yml)
-app.config['GOOGLE_CLIENT_ID']     = os.environ.get('GOOGLE_CLIENT_ID')
-app.config['GOOGLE_CLIENT_SECRET'] = os.environ.get('GOOGLE_CLIENT_SECRET')
 
 db = SQLAlchemy(app)
-
-# ── OAuth con Google ─────────────────────────────────────────────────────────
-oauth = OAuth(app)
-google = oauth.register(
-    name='google',
-    client_id=app.config['GOOGLE_CLIENT_ID'],
-    client_secret=app.config['GOOGLE_CLIENT_SECRET'],
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    client_kwargs={'scope': 'openid email profile'}
-)
 
 # --- MODELOS ---
 class User(db.Model):
@@ -132,41 +119,7 @@ def get_me(current_user):
         'balance': current_user.balance
     })
 
-@app.route('/api/auth/google')
-def google_auth():
-    redirect_uri = 'http://localhost:5000/api/auth/google/callback'
-    return google.authorize_redirect(redirect_uri)
 
-@app.route('/api/auth/google/callback')
-def google_callback():
-    try:
-        token = google.authorize_access_token()
-        user_info = token.get('userinfo')
-    except Exception as e:
-        return jsonify({'error': str(e), 'message': 'Google rechazó las credenciales. Revisa tu Client ID y Secret.'}), 401
-    
-    
-    email = user_info['email']
-    user = User.query.filter_by(email=email).first()
-    
-    if not user:
-        user = User(
-            email=email,
-            username=user_info.get('name', email.split('@')[0]),
-            password=generate_password_hash('oauth_random_pass', method='pbkdf2:sha256'),
-            role='user',
-            balance=2000.0
-        )
-        db.session.add(user)
-        db.session.commit()
-
-    jwt_token = jwt.encode({
-        'id': user.id,
-        'role': user.role,
-        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
-    }, app.config['SECRET_KEY'], algorithm="HS256")
-    
-    return redirect(f"http://localhost:8080/?tc_token={jwt_token}")
 
 @app.route('/api/products', methods=['GET'])
 def get_products():
@@ -199,30 +152,67 @@ def create_product(current_user):
 @token_required
 def checkout(current_user):
     data = request.get_json()
-    items = data.get('items', [])
-    total = float(data.get('total', 0.0))
+    items_input = data.get('items')
 
-    if current_user.balance < total:
-        return jsonify({'message': 'Saldo insuficiente'}), 400
+    # Basic input validation
+    if not items_input or not isinstance(items_input, list):
+        return jsonify({'message': 'Formato de items inválido'}), 400
 
-    # Stock validation n locking (simplified)
-    for item in items:
-        prod = db.session.get(Product, item['id'])
-        if not prod or prod.stock < 1:
+    if not items_input:
+        return jsonify({'message': 'El carrito está vacío'}), 400
+
+    try:
+        # Iniciamos un bloque transaccional explícito
+        total = 0.0
+        processed_items = []
+
+        # Recorremos cada item para verificar stock y precio real
+        for item in items_input:
+            item_id = item.get('id')
+            if not item_id:
+                db.session.rollback()
+                return jsonify({'message': 'Item sin ID'}), 400
+
+            # Bloqueo pesimista: with_for_update evita race conditions en stock
+            prod = db.session.query(Product).with_for_update().get(item_id)
+            
+            if not prod or prod.stock < 1:
+                db.session.rollback()
+                return jsonify({'message': f"El producto {prod.name if prod else f'ID {item_id}'} se ha agotado."}), 400
+            
+            # Restamos stock y sumamos precio REAL de la BD
+            prod.stock -= 1
+            total += prod.price
+            processed_items.append({'id': prod.id, 'name': prod.name, 'price': prod.price})
+
+        # Una vez calculado el total seguro, verificamos el saldo
+        if current_user.balance < total:
             db.session.rollback()
-            return jsonify({'message': f"El producto {item.get('name')} se ha agotado."}), 400
-        prod.stock -= 1
+            return jsonify({'message': 'Saldo insuficiente'}), 400
 
-    current_user.balance -= total
-    
-    order = Order(
-        user_id=current_user.id,
-        total=total,
-        items_summary=json.dumps(items)
-    )
-    db.session.add(order)
-    db.session.commit()
-    return jsonify({'message': 'Compra verificada y guardada'}), 200
+        # Cobramos al usuario
+        current_user.balance -= total
+
+        # Guardamos el pedido
+        order = Order(
+            user_id=current_user.id,
+            total=total,
+            items_summary=json.dumps(processed_items)
+        )
+        db.session.add(order)
+        
+        # Guardamos todos los cambios juntos (Stock + Balance + Order)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Compra verificada y guardada',
+            'order_id': order.id,
+            'new_balance': current_user.balance
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': f"Error procesando pago: {str(e)}"}), 500
 
 @app.route('/api/orders/me', methods=['GET'])
 @token_required

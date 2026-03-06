@@ -1,0 +1,40 @@
+# Backend / Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+venv.bak/
+.env
+
+# Base de datos (CRÍTICO: nunca subir a git)
+backend/instance/
+*.db
+*.sqlite3
+
+# Frontend (si más adelante usaras npm para dependencias de Nginx/JS)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+
+# Docker
+.dockerignore
+# Podrías querer subir tus Dockerfile y docker-compose.yml, así que NO los ignoramos aquí.
+
+# Archivos de SO
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores y Entornos
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# AI / Logs Temporales
+logs/
+*.log
+.gemini/
+.ai/
